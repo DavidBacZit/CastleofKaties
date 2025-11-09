@@ -1,31 +1,31 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/draft-ERC20Permit.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@openzeppelin/contracts/utils/Address.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts@4.9.6/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts@4.9.6/token/ERC20/extensions/ERC20Permit.sol";
+import "@openzeppelin/contracts@4.9.6/token/ERC721/IERC721.sol";
+import "@openzeppelin/contracts@4.9.6/token/ERC721/IERC721Receiver.sol";
+import "@openzeppelin/contracts@4.9.6/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts@4.9.6/security/Pausable.sol";
+import "@openzeppelin/contracts@4.9.6/access/Ownable.sol";
+import "@openzeppelin/contracts@4.9.6/token/ERC20/IERC20.sol";
 
 interface ILiquidMeowRWD {
     function mint(address to, uint256 amount) external;
 }
 
-contract LiquidMeow is ERC20, ERC20Permit, ReentrancyGuard, Pausable, Ownable(0xeA29a9ce557696A98b4607Ab47754c4F800527f2) {
-    using ECDSA for bytes32;
-    using Address for address payable;
-    using SafeERC20 for IERC20;
-
+contract LiquidMeowToken is
+    ERC20,
+    ERC20Permit,
+    ReentrancyGuard,
+    Pausable,
+    Ownable,
+    IERC721Receiver
+{
     uint8 private constant DECIMALS = 18;
-    uint256 public constant UNIT = 10**18;
-    uint256 public constant LMT_PER_NFT = 10000 * UNIT;
-    uint256 public constant SPECIFIC_FEE = 200 * UNIT;
     uint256 public constant PRECISION = 1e18;
+    uint256 public constant LMT_PER_NFT = 10000 * PRECISION;
+    uint256 public constant SPECIFIC_FEE = 200 * PRECISION;
 
     uint256 public rewardPerBlock = 45 * (10**17);
 
@@ -39,25 +39,12 @@ contract LiquidMeow is ERC20, ERC20Permit, ReentrancyGuard, Pausable, Ownable(0x
         uint256 depositedBlock;
     }
     VaultItem[] public vault;
-    mapping(bytes32 => uint256) public indexOf;
-
-    // only a single whitelisted NFT collection
-    address public constant ALLOWED_NFT = 0x0a34eF3DAfD247eA4D66B8CC459CDcc8f5695234;
+    mapping(bytes32 => uint256) public indexOf; // stored as idx+1, 0 means not present
 
     uint256 public rewardPerTokenStored;
     uint256 public lastUpdateBlock;
     mapping(address => uint256) public userRewardPerTokenPaid;
     mapping(address => uint256) public rewards;
-
-    // fixed type string (was typo: uintuint256)
-    bytes32 public constant ORDER_TYPEHASH = keccak256(
-        "Order(address maker,uint256 lmtAmount,uint256 ethAmount,uint256 expiry,uint256 makerNonce,uint256 makerFee,uint256 takerFee,address taker)"
-    );
-    mapping(bytes32 => uint256) public filledAmount;
-    mapping(address => mapping(uint256 => bool)) public cancelledNonce;
-
-    // pull payments for ETH to avoid reentrancy/gas issues
-    mapping(address => uint256) public pendingETH;
 
     event Deposited(address indexed depositor, address indexed nft, uint256 indexed tokenId, uint256 vaultIndex);
     event WithdrawnLIFO(address indexed caller, address indexed nft, uint256 indexed tokenId);
@@ -68,22 +55,13 @@ contract LiquidMeow is ERC20, ERC20Permit, ReentrancyGuard, Pausable, Ownable(0x
     event TreasuryChanged(address indexed oldTreasury, address indexed newTreasury);
     event RewardPerBlockChanged(uint256 oldVal, uint256 newVal);
     event RewardsClaimed(address indexed user, address indexed to, uint256 amount);
-    event OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed taker, uint256 lmtFilled, uint256 ethPaid);
-    event OrderCancelled(address indexed maker, uint256 nonce);
-    event PendingETHWithdrawn(address indexed who, uint256 amount);
-    event RescueERC721(address indexed nft, uint256 tokenId, address indexed to);
-    event RescueERC20(address indexed token, address indexed to, uint256 amount);
-    event RescueETH(address indexed to, uint256 amount);
 
     constructor(
-        address _rwdToken,
         address _treasury,
         string memory _name,
         string memory _symbol
     ) ERC20(_name, _symbol) ERC20Permit(_name) {
-        require(_rwdToken != address(0), "LM: rwd zero");
-        require(_treasury != address(0), "LM: treasury zero");
-        rwdToken = ILiquidMeowRWD(_rwdToken);
+        require(_treasury != owner(), "LM: treasury zero");
         treasury = _treasury;
         lastUpdateBlock = block.number;
     }
@@ -92,9 +70,10 @@ contract LiquidMeow is ERC20, ERC20Permit, ReentrancyGuard, Pausable, Ownable(0x
         return DECIMALS;
     }
 
-    // OZv5: override ERC20._update hook so reward accounting runs on all token moves
-    function _update(address from, address to, uint256 value) internal virtual override {
+    // Update rewards accounting in token transfers
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal override(ERC20) {
         _updateRewardPerToken();
+
         if (from != address(0)) {
             rewards[from] = earned(from);
             userRewardPerTokenPaid[from] = rewardPerTokenStored;
@@ -103,7 +82,8 @@ contract LiquidMeow is ERC20, ERC20Permit, ReentrancyGuard, Pausable, Ownable(0x
             rewards[to] = earned(to);
             userRewardPerTokenPaid[to] = rewardPerTokenStored;
         }
-        super._update(from, to, value);
+
+        super._beforeTokenTransfer(from, to, amount);
     }
 
     function _updateRewardPerToken() internal {
@@ -160,35 +140,36 @@ contract LiquidMeow is ERC20, ERC20Permit, ReentrancyGuard, Pausable, Ownable(0x
         emit RewardsClaimed(msg.sender, to, payment);
     }
 
-    // --- deposit / withdraw ---
-    function deposit(uint256 tokenId) external nonReentrant whenNotPaused {
-        _depositFor(msg.sender, tokenId);
+    function deposit(address nft, uint256 tokenId) external nonReentrant whenNotPaused {
+        _depositFor(msg.sender, nft, tokenId);
     }
 
-    function depositBatch(uint256[] calldata tokenIds) external nonReentrant whenNotPaused {
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            _depositFor(msg.sender, tokenIds[i]);
+    function depositBatch(address[] calldata nfts, uint256[] calldata tokenIds) external nonReentrant whenNotPaused {
+        require(nfts.length == tokenIds.length, "LM: len mismatch");
+        for (uint256 i = 0; i < nfts.length; i++) {
+            _depositFor(msg.sender, nfts[i], tokenIds[i]);
         }
-        emit BatchDeposited(msg.sender, tokenIds.length);
+        emit BatchDeposited(msg.sender, nfts.length);
     }
 
-    function _depositFor(address depositor, uint256 tokenId) internal {
-        bytes32 key = keccak256(abi.encode(ALLOWED_NFT, tokenId));
+    function _depositFor(address depositor, address nft, uint256 tokenId) internal {
+        require(nft != address(0), "LM: nft zero");
+        bytes32 key = keccak256(abi.encodePacked(nft, tokenId));
         require(indexOf[key] == 0, "LM: already in vault");
-        require(IERC721(ALLOWED_NFT).ownerOf(tokenId) == address(this), "LM: not received");
-        VaultItem memory item = VaultItem({ nft: ALLOWED_NFT, tokenId: tokenId, depositor: depositor, depositedBlock: block.number });
+        require(IERC721(nft).ownerOf(tokenId) == address(this), "LM: not received");
+        VaultItem memory item = VaultItem({ nft: nft, tokenId: tokenId, depositor: depositor, depositedBlock: block.number });
         vault.push(item);
         uint256 idx = vault.length - 1;
         indexOf[key] = idx + 1;
         _mint(depositor, LMT_PER_NFT);
-        emit Deposited(depositor, ALLOWED_NFT, tokenId, idx);
+        emit Deposited(depositor, nft, tokenId, idx);
     }
 
     function withdrawLIFO() external nonReentrant whenNotPaused {
         require(vault.length > 0, "LM: vault empty");
         _burn(msg.sender, LMT_PER_NFT);
         VaultItem memory item = vault[vault.length - 1];
-        bytes32 key = keccak256(abi.encode(item.nft, item.tokenId));
+        bytes32 key = keccak256(abi.encodePacked(item.nft, item.tokenId));
         indexOf[key] = 0;
         vault.pop();
         IERC721(item.nft).safeTransferFrom(address(this), msg.sender, item.tokenId);
@@ -201,7 +182,7 @@ contract LiquidMeow is ERC20, ERC20Permit, ReentrancyGuard, Pausable, Ownable(0x
         _burn(msg.sender, totalBurn);
         for (uint256 i = 0; i < count; i++) {
             VaultItem memory item = vault[vault.length - 1];
-            bytes32 key = keccak256(abi.encode(item.nft, item.tokenId));
+            bytes32 key = keccak256(abi.encodePacked(item.nft, item.tokenId));
             indexOf[key] = 0;
             vault.pop();
             IERC721(item.nft).safeTransferFrom(address(this), msg.sender, item.tokenId);
@@ -210,37 +191,34 @@ contract LiquidMeow is ERC20, ERC20Permit, ReentrancyGuard, Pausable, Ownable(0x
         emit BatchWithdrawnLIFO(msg.sender, count);
     }
 
-    function withdrawSpecific(uint256 tokenId) external nonReentrant whenNotPaused {
-        bytes32 key = keccak256(abi.encode(ALLOWED_NFT, tokenId));
+    function withdrawSpecific(address nft, uint256 tokenId) external nonReentrant whenNotPaused {
+        bytes32 key = keccak256(abi.encodePacked(nft, tokenId));
         uint256 idxPlus1 = indexOf[key];
         require(idxPlus1 != 0, "LM: not in vault");
         uint256 idx = idxPlus1 - 1;
-        // transfer fee first, then burn the base LMT amount
-        _transfer(msg.sender, treasury, SPECIFIC_FEE);
         _burn(msg.sender, LMT_PER_NFT);
+        _transfer(msg.sender, treasury, SPECIFIC_FEE);
         uint256 lastIdx = vault.length - 1;
         if (idx != lastIdx) {
             VaultItem memory lastItem = vault[lastIdx];
             vault[idx] = lastItem;
-            bytes32 lastKey = keccak256(abi.encode(lastItem.nft, lastItem.tokenId));
+            bytes32 lastKey = keccak256(abi.encodePacked(lastItem.nft, lastItem.tokenId));
             indexOf[lastKey] = idx + 1;
         }
         indexOf[key] = 0;
         vault.pop();
-        IERC721(ALLOWED_NFT).safeTransferFrom(address(this), msg.sender, tokenId);
-        emit WithdrawnSpecific(msg.sender, ALLOWED_NFT, tokenId);
+        _mint(treasury, SPECIFIC_FEE);
+        IERC721(nft).safeTransferFrom(address(this), msg.sender, tokenId);
+        emit WithdrawnSpecific(msg.sender, nft, tokenId);
     }
 
-    function withdrawSpecificBatch(uint256[] calldata tokenIds) external nonReentrant whenNotPaused {
-        require(tokenIds.length > 0, "LM: invalid input");
-        uint256 count = tokenIds.length;
-        uint256 totalBurn = LMT_PER_NFT * count;
-        uint256 totalFee = SPECIFIC_FEE * count;
-        // transfer total fee first, then burn
-        _transfer(msg.sender, treasury, totalFee);
-        _burn(msg.sender, totalBurn);
+    function withdrawSpecificBatch(address[] calldata nfts, uint256[] calldata tokenIds) external nonReentrant whenNotPaused {
+        require(nfts.length == tokenIds.length && nfts.length > 0, "LM: invalid input");
+        uint256 count = nfts.length;
+        _transfer(msg.sender, treasury, SPECIFIC_FEE * count);
+        _burn(msg.sender, LMT_PER_NFT * count);
         for (uint256 i = 0; i < count; i++) {
-            bytes32 key = keccak256(abi.encode(ALLOWED_NFT, tokenIds[i]));
+            bytes32 key = keccak256(abi.encodePacked(nfts[i], tokenIds[i]));
             uint256 idxPlus1 = indexOf[key];
             require(idxPlus1 != 0, "LM: not in vault");
             uint256 idx = idxPlus1 - 1;
@@ -248,107 +226,26 @@ contract LiquidMeow is ERC20, ERC20Permit, ReentrancyGuard, Pausable, Ownable(0x
             if (idx != lastIdx) {
                 VaultItem memory lastItem = vault[lastIdx];
                 vault[idx] = lastItem;
-                bytes32 lastKey = keccak256(abi.encode(lastItem.nft, lastItem.tokenId));
+                bytes32 lastKey = keccak256(abi.encodePacked(lastItem.nft, lastItem.tokenId));
                 indexOf[lastKey] = idx + 1;
             }
             indexOf[key] = 0;
             vault.pop();
-            IERC721(ALLOWED_NFT).safeTransferFrom(address(this), msg.sender, tokenIds[i]);
-            emit WithdrawnSpecific(msg.sender, ALLOWED_NFT, tokenIds[i]);
+            _mint(treasury, SPECIFIC_FEE);
+            IERC721(nfts[i]).safeTransferFrom(address(this), msg.sender, tokenIds[i]);
+            emit WithdrawnSpecific(msg.sender, nfts[i], tokenIds[i]);
         }
         emit BatchWithdrawnSpecific(msg.sender, count);
     }
 
-    function onERC721Received(address, address from, uint256 tokenId, bytes calldata) external nonReentrant returns (bytes4) {
-        // ensure only whitelisted NFT collection can be deposited via safeTransfer
-        require(msg.sender == ALLOWED_NFT, "LM: nft not allowed");
+    // Implement IERC721Receiver: ensures contract can receive safeTransferFrom
+    function onERC721Received(address, address from, uint256 tokenId, bytes calldata) external override returns (bytes4) {
         require(IERC721(msg.sender).ownerOf(tokenId) == address(this), "LM: not owned after transfer");
-        _depositFor(from, tokenId);
+        _depositFor(from, msg.sender, tokenId);
         return this.onERC721Received.selector;
     }
 
-    struct Order {
-        address maker;
-        uint256 lmtAmount;
-        uint256 ethAmount;
-        uint256 expiry;
-        uint256 makerNonce;
-        uint256 makerFee;
-        uint256 takerFee;
-        address taker;
-    }
-
-    function fillSignedOrder(Order calldata order, uint256 lmtFillAmount, bytes calldata signature) external payable nonReentrant whenNotPaused {
-        require(order.maker != address(0), "LM: maker zero");
-        require(lmtFillAmount > 0 && lmtFillAmount <= order.lmtAmount, "LM: invalid fill");
-        require(block.number <= order.expiry, "LM: order expired");
-        if (order.taker != address(0)) {
-            require(order.taker == msg.sender, "LM: not designated taker");
-        }
-        require(!cancelledNonce[order.maker][order.makerNonce], "LM: order cancelled");
-        bytes32 structHash = keccak256(abi.encode(
-            ORDER_TYPEHASH,
-            order.maker,
-            order.lmtAmount,
-            order.ethAmount,
-            order.expiry,
-            order.makerNonce,
-            order.makerFee,
-            order.takerFee,
-            order.taker
-        ));
-        bytes32 orderHash = _hashTypedDataV4(structHash);
-        uint256 alreadyFilled = filledAmount[orderHash];
-        require(alreadyFilled < order.lmtAmount, "LM: already filled");
-        require(alreadyFilled + lmtFillAmount <= order.lmtAmount, "LM: overfill");
-        address signer = ECDSA.recover(orderHash, signature);
-        require(signer == order.maker, "LM: invalid signature");
-        uint256 ethForFill = (order.ethAmount * lmtFillAmount) / order.lmtAmount;
-        uint256 makerFeePortion = (order.makerFee * lmtFillAmount) / order.lmtAmount;
-        uint256 takerFeePortion = (order.takerFee * lmtFillAmount) / order.lmtAmount;
-        uint256 totalRequired = ethForFill + takerFeePortion;
-        require(msg.value == totalRequired, "LM: incorrect ETH supplied");
-        filledAmount[orderHash] = alreadyFilled + lmtFillAmount;
-
-        // As this contract implements the ERC20, we use internal transfer semantics.
-        require(balanceOf(order.maker) >= lmtFillAmount, "LM: maker insufficient balance");
-        _transfer(order.maker, msg.sender, lmtFillAmount);
-
-        uint256 toMaker = ethForFill;
-        if (makerFeePortion > 0) {
-            require(toMaker >= makerFeePortion, "LM: fee > amount");
-            toMaker = toMaker - makerFeePortion;
-        }
-
-        // Use pull payments to avoid reentrancy / gas griefing: accumulate pendingETH
-        pendingETH[order.maker] += toMaker;
-        uint256 totalFees = makerFeePortion + takerFeePortion;
-        if (totalFees > 0) {
-            pendingETH[treasury] += totalFees;
-        }
-
-        emit OrderFilled(orderHash, order.maker, msg.sender, lmtFillAmount, ethForFill);
-    }
-
-    function withdrawPendingETH() external nonReentrant {
-        uint256 amount = pendingETH[msg.sender];
-        require(amount > 0, "LM: nothing to withdraw");
-        pendingETH[msg.sender] = 0;
-        Address.sendValue(payable(msg.sender), amount);
-        emit PendingETHWithdrawn(msg.sender, amount);
-    }
-
-    function cancelOrder(uint256 nonce) external {
-        cancelledNonce[msg.sender][nonce] = true;
-        emit OrderCancelled(msg.sender, nonce);
-    }
-
-    function isOrderFilledOrCancelled(bytes32 orderHash, Order calldata order) external view returns (bool) {
-        uint256 filled = filledAmount[orderHash];
-        bool cancelled = cancelledNonce[order.maker][order.makerNonce];
-        return (filled >= order.lmtAmount) || cancelled;
-    }
-
+    // Admins
     function setTreasury(address _treasury) external onlyOwner {
         require(_treasury != address(0), "LM: treasury zero");
         address old = treasury;
@@ -371,22 +268,15 @@ contract LiquidMeow is ERC20, ERC20Permit, ReentrancyGuard, Pausable, Ownable(0x
         _unpause();
     }
 
-    function rescueERC721(address nft, uint256 tokenId, address to) external onlyOwner nonReentrant {
+    // Rescue helpers
+    function rescueERC721(address nft, uint256 tokenId, address to) external onlyOwner {
         require(to != address(0), "LM: rescue to zero");
         IERC721(nft).safeTransferFrom(address(this), to, tokenId);
-        emit RescueERC721(nft, tokenId, to);
     }
 
-    function rescueERC20(address token, address to, uint256 amount) external onlyOwner nonReentrant {
-        require(to != address(0), "LM: rescue to zero");
-        IERC20(token).safeTransfer(to, amount);
-        emit RescueERC20(token, to, amount);
-    }
-
-    function rescueETH(address to, uint256 amount) external onlyOwner nonReentrant {
-        require(to != address(0), "LM: rescue to zero");
-        Address.sendValue(payable(to), amount);
-        emit RescueETH(to, amount);
+    function rescueERC20(address token, address to, uint256 amount) external onlyOwner {
+        require(token != address(this), "LM: cannot rescue LMT");
+        IERC20(token).transfer(to, amount);
     }
 
     receive() external payable {}
