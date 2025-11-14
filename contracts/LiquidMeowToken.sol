@@ -421,8 +421,13 @@ contract LiquidMeowToken is
         }
     }
 
+    // PATCH: Settle rewards before changing rewardPerBlock
     function setRewardPerBlock(uint256 _rewardPerBlock) external onlyOwner {
         require(_rewardPerBlock != 0, "LM: zero reward");
+
+        // Settle all rewards at the old rate up to the current block
+        _updateRewardPerToken();
+
         uint256 old = rewardPerBlock; // Cache the state variable
         if (old != _rewardPerBlock) {
             rewardPerBlock = _rewardPerBlock;
@@ -436,5 +441,25 @@ contract LiquidMeowToken is
 
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    // =========================
+    // Rescue function for untracked KATIES NFTs
+    // =========================
+
+    /// @dev Rescue KATIES NFTs that are owned by this contract but not tracked in the vault.
+    /// This handles the case where someone used `transferFrom` directly instead of the
+    /// `deposit`/`safeTransferFrom` flow, leaving the NFT stuck.
+    function rescueUntrackedKaties(uint256 tokenId, address to)
+        external
+        onlyOwner
+        nonReentrant
+    {
+        require(to != address(0), "LM: to zero");
+        bytes32 key = keccak256(abi.encode(KATIES, tokenId));
+        require(indexOf[key] == 0, "LM: tracked in vault");
+        require(IERC721(KATIES).ownerOf(tokenId) == address(this), "LM: not owned");
+
+        IERC721(KATIES).safeTransferFrom(address(this), to, tokenId);
     }
 }
