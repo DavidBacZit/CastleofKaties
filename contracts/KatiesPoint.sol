@@ -1,85 +1,77 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.17;
+pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts@4.9.0/access/AccessControl.sol";
-import "@openzeppelin/contracts@4.9.0/token/ERC20/ERC20.sol";
+// Import standard ERC20 and ownership management from OpenZeppelin
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
+contract CustomMintERC20 is ERC20, Ownable {
+    // Mapping to store addresses that are allowed to mint tokens
+    mapping(address => bool) public minter;
 
-contract KatiesPoint is ERC20, AccessControl {
-    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    // Block number when rewards were last accrued
+    uint256 public lastAccruedBlock;
 
-    uint256 public lastMintBlock;
-    uint256 public ratePerBlock;
+    // Number of tokens minted per block (2.3 tokens with 18 decimals)
+    // 2.3 * 10^18 = 23 * 10^17
+    uint256 public constant TOKENS_PER_BLOCK = 23 * 10**17;
 
-    address public recipient;
+    // Constructor sets token name, symbol and makes deployer the initial owner
+    constructor(
+        string memory _name,
+        string memory _symbol
+    ) ERC20(_name, _symbol) Ownable(msg.sender) {
+        // Optionally set the contract deployer as a minter
+        minter[msg.sender] = true;
 
-    event AccruedMinted(address indexed recipient, uint256 minted, uint256 fromBlock, uint256 toBlock);
-    event RecipientChanged(address indexed oldRecipient, address indexed newRecipient);
-    event RatePerBlockChanged(uint256 oldRate, uint256 newRate);
-
-    constructor(address defaultAdmin, address minter) ERC20("Katies Point", "KP") {
-        require(defaultAdmin != address(0), "defaultAdmin=0");
-        _grantRole(DEFAULT_ADMIN_ROLE, defaultAdmin);
-        _grantRole(MINTER_ROLE, minter);
-
-        recipient = defaultAdmin;
-        lastMintBlock = block.number;
-
-        ratePerBlock = 23 * 10 ** 17;
+        // Initialize lastAccruedBlock to the current block at deployment
+        lastAccruedBlock = block.number;
     }
 
-    function claimable() public view returns (uint256) {
-        if (block.number <= lastMintBlock) return 0;
-        uint256 blocks = block.number - lastMintBlock;
-        if (ratePerBlock == 0) return 0;
-        require(blocks <= type(uint256).max / ratePerBlock, "overflow");
-        return blocks * ratePerBlock;
+    // Function for the owner to add or remove minters
+    function setMinter(address _account, bool _canMint) external onlyOwner {
+        // Update minter status for the given address
+        minter[_account] = _canMint;
     }
 
-    function mintAccrued() public returns (uint256 minted) {
-        if (block.number <= lastMintBlock) return 0;
-        uint256 fromBlock = lastMintBlock;
-        uint256 blocks = block.number - fromBlock;
+    // Internal function to mint accrued tokens to the owner based on blocks passed
+    function _mintAccrued() internal {
+        // Get current block number
+        uint256 currentBlock = block.number;
 
-        if (ratePerBlock == 0) {
-            lastMintBlock = block.number;
-            return 0;
-        }
-        require(blocks <= type(uint256).max / ratePerBlock, "overflow");
-
-        uint256 toMint = blocks * ratePerBlock;
-        if (toMint == 0) {
-            lastMintBlock = block.number;
-            return 0;
+        // If no new blocks have passed since last accrual, do nothing
+        if (currentBlock <= lastAccruedBlock) {
+            return;
         }
 
-        lastMintBlock = block.number;
-        _mint(recipient, toMint);
-        emit AccruedMinted(recipient, toMint, fromBlock, block.number);
-        return toMint;
+        // Calculate how many blocks have passed
+        uint256 blocksElapsed = currentBlock - lastAccruedBlock;
+
+        // Calculate the total amount of tokens to mint:
+        // blocksElapsed * TOKENS_PER_BLOCK
+        uint256 amountToMint = blocksElapsed * TOKENS_PER_BLOCK;
+
+        // Update the last accrued block to the current block
+        lastAccruedBlock = currentBlock;
+
+        // Mint the accrued tokens to the owner
+        _mint(owner(), amountToMint);
     }
 
-    function setRecipient(address newRecipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(newRecipient != address(0), "recipient=0");
-        address old = recipient;
-        recipient = newRecipient;
-        emit RecipientChanged(old, newRecipient);
+    // Public function to manually trigger minting of accrued tokens to the owner
+    function mintAccrued() external {
+        _mintAccrued();
     }
 
-    function setRatePerBlock(uint256 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(newRate != 0, "rate=0");
-        uint256 old = ratePerBlock;
+    // Mint function that can only be called by allowed minters
+    function mint(address _to, uint256 _amount) external {
+        // Check if the caller is in the minter mapping
+        require(minter[msg.sender], "Caller is not a minter");
 
-        if (block.number > lastMintBlock) {
-            mintAccrued();
-        }
+        // First, mint tokens to the specified address
+        _mint(_to, _amount);
 
-        ratePerBlock = newRate;
-        emit RatePerBlockChanged(old, newRate);
-    }
-
-    function mint(address to, uint256 amount) public onlyRole(MINTER_ROLE) {
-        mintAccrued();
-        _mint(to, amount);
+        // Then, also mint accrued tokens to the owner based on blocks passed
+        _mintAccrued();
     }
 }
