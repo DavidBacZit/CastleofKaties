@@ -28,13 +28,13 @@ contract LiquidMeowToken is
     uint256 private constant MAX_BATCH = 20;
     uint256 public rewardPerBlock = 45 * (10**17);
 
-    ILiquidMeowRWD private constant rwdToken = ILiquidMeowRWD(0x802a58368959C383B2d24C528723B39fc46778b5);
-    address public constant KATIES = 0x0a34eF3DAfD247eA4D66B8CC459CDcc8f5695234;
+    ILiquidMeowRWD private constant rwdToken =
+        ILiquidMeowRWD(0x802a58368959C383B2d24C528723B39fc46778b5);
+    address public constant KATIES =
+        0x0a34eF3DAfD247eA4D66B8CC459CDcc8f5695234;
 
+    // Treasury wallet (receives specific withdraw fees)
     address public treasury;
-    address public pendingTreasury;
-    uint256 public pendingTreasuryTimestamp;
-    uint48 private constant TREASURY_CHANGE_DELAY = 1 days;
 
     struct VaultItem {
         address depositor;
@@ -43,7 +43,8 @@ contract LiquidMeowToken is
     }
 
     VaultItem[] public vault;
-    mapping(bytes32 => uint256) public indexOf; // stored as idx+1, 0 means not present
+    // stored as idx+1, 0 means not present
+    mapping(bytes32 => uint256) public indexOf;
 
     // Reward bookkeeping
     uint256 public rewardPerTokenStored;
@@ -51,7 +52,11 @@ contract LiquidMeowToken is
     mapping(address => uint256) public userRewardPerTokenPaid;
     mapping(address => uint256) public rewards;
 
-    event Deposited(address indexed depositor, uint256 indexed tokenId, uint256 vaultIndex);
+    event Deposited(
+        address indexed depositor,
+        uint256 indexed tokenId,
+        uint256 vaultIndex
+    );
     event Withdrawn(address indexed caller, uint256 indexed tokenId);
     event TreasuryChanged(address indexed oldTreasury, address indexed newTreasury);
     event RewardPerBlockChanged(uint256 oldVal, uint256 newVal);
@@ -73,7 +78,11 @@ contract LiquidMeowToken is
     }
 
     /// @dev Update rewards for `from` and `to` before token transfers (mint/burn/transfer).
-    function _beforeTokenTransfer(address from, address to, uint256 amount) internal override(ERC20) {
+    function _beforeTokenTransfer(
+        address from,
+        address to,
+        uint256 amount
+    ) internal override(ERC20) {
         if (amount == 0) {
             super._beforeTokenTransfer(from, to, amount);
             return;
@@ -101,7 +110,9 @@ contract LiquidMeowToken is
     function _updateRewardPerToken() internal {
         uint256 currentBlk = block.number;
         uint256 blocksElapsed;
-        unchecked { blocksElapsed = currentBlk - lastUpdateBlock; } // safe: if negative won't happen in solidity unsigned
+        unchecked {
+            blocksElapsed = currentBlk - lastUpdateBlock;
+        } // safe: if negative won't happen in solidity unsigned
 
         if (blocksElapsed == 0) {
             return;
@@ -135,7 +146,9 @@ contract LiquidMeowToken is
 
         uint256 blocksElapsed = 0;
         if (block.number > _lastUpdateBlock) {
-            unchecked { blocksElapsed = block.number - _lastUpdateBlock; }
+            unchecked {
+                blocksElapsed = block.number - _lastUpdateBlock;
+            }
         }
 
         if (blocksElapsed != 0 && _totalSupply != 0) {
@@ -181,14 +194,26 @@ contract LiquidMeowToken is
         emit RewardsClaimed(msg.sender, to, payment);
     }
 
+    // =========================
+    // NFT DEPOSIT (using transferFrom)
+    // =========================
+
     function deposit(uint256 tokenId) external nonReentrant whenNotPaused {
+        // User must be owner or approved for this tokenId
+        IERC721(KATIES).transferFrom(msg.sender, address(this), tokenId);
         _depositFor(msg.sender, tokenId);
     }
 
-    function depositBatch(uint256[] calldata tokenIds) external nonReentrant whenNotPaused {
+    function depositBatch(uint256[] calldata tokenIds)
+        external
+        nonReentrant
+        whenNotPaused
+    {
         uint256 len = tokenIds.length;
         require(len < MAX_BATCH + 1, "LM: batch too large");
+
         for (uint256 i = 0; i < len; ++i) {
+            IERC721(KATIES).transferFrom(msg.sender, address(this), tokenIds[i]);
             _depositFor(msg.sender, tokenIds[i]);
         }
     }
@@ -196,7 +221,12 @@ contract LiquidMeowToken is
     function _depositFor(address depositor, uint256 tokenId) internal {
         bytes32 key = keccak256(abi.encode(KATIES, tokenId));
         require(indexOf[key] == 0, "LM: already in vault");
-        require(IERC721(KATIES).ownerOf(tokenId) == address(this), "LM: not received");
+        // sanity check: the contract must actually own the NFT
+        require(
+            IERC721(KATIES).ownerOf(tokenId) == address(this),
+            "LM: not received"
+        );
+
         VaultItem memory item;
         item.tokenId = tokenId;
         item.depositor = depositor;
@@ -209,19 +239,33 @@ contract LiquidMeowToken is
         emit Deposited(depositor, tokenId, idx);
     }
 
+    // =========================
+    // NFT WITHDRAW (LIFO)
+    // =========================
+
     function withdrawLIFO() external nonReentrant whenNotPaused {
         uint256 vaultLength = vault.length; // Cache the vault length
         require(vaultLength != 0, "LM: vault empty");
         _burn(msg.sender, LMT_PER_NFT);
+
         VaultItem storage item = vault[vaultLength - 1];
         bytes32 key = keccak256(abi.encode(KATIES, item.tokenId));
         delete indexOf[key];
         vault.pop();
-        IERC721(KATIES).safeTransferFrom(address(this), msg.sender, item.tokenId);
+
+        IERC721(KATIES).safeTransferFrom(
+            address(this),
+            msg.sender,
+            item.tokenId
+        );
         emit Withdrawn(msg.sender, item.tokenId);
     }
 
-    function withdrawLIFOBatch(uint256 count) external nonReentrant whenNotPaused {
+    function withdrawLIFOBatch(uint256 count)
+        external
+        nonReentrant
+        whenNotPaused
+    {
         require(count != 0, "LM: count must be greater than 0");
         uint256 vaultLength = vault.length; // Cache vault length
         require(count < vaultLength + 1, "LM: count exceeds vault length");
@@ -235,7 +279,11 @@ contract LiquidMeowToken is
             bytes32 key = keccak256(abi.encode(KATIES, item.tokenId));
             delete indexOf[key];
             vault.pop();
-            IERC721(KATIES).safeTransferFrom(address(this), msg.sender, item.tokenId);
+            IERC721(KATIES).safeTransferFrom(
+                address(this),
+                msg.sender,
+                item.tokenId
+            );
             emit Withdrawn(msg.sender, item.tokenId);
             unchecked {
                 vaultLength--; // Decrement the cached length
@@ -243,22 +291,35 @@ contract LiquidMeowToken is
         }
     }
 
-    function withdrawSpecific(address nft, uint256 tokenId) external nonReentrant whenNotPaused {
-        bytes32 key = keccak256(abi.encode(nft, tokenId));
+    // =========================
+    // NFT WITHDRAW (SPECIFIC)
+    // KATIES-only after your request
+    // =========================
+
+    function withdrawSpecific(uint256 tokenId)
+        external
+        nonReentrant
+        whenNotPaused
+    {
+        // Only KATIES collection
+        bytes32 key = keccak256(abi.encode(KATIES, tokenId));
         uint256 idxPlus1 = indexOf[key];
         require(idxPlus1 != 0, "LM: not in vault");
         uint256 idx = idxPlus1 - 1;
 
         // Require caller has sufficient LMT and fee
-        require(balanceOf(msg.sender) >= LMT_PER_NFT + SPECIFIC_FEE, "LM: insufficient LMT+fee");
+        require(
+            balanceOf(msg.sender) >= LMT_PER_NFT + SPECIFIC_FEE,
+            "LM: insufficient LMT+fee"
+        );
 
         // Transfer specific fee to treasury and burn LMT_PER_NFT from caller
         _transfer(msg.sender, treasury, SPECIFIC_FEE);
         _burn(msg.sender, LMT_PER_NFT);
-        
+
         uint256 vaultLength = vault.length; // Cache vault.length in memory
         uint256 lastIdx = vaultLength - 1;
-        
+
         if (idx != lastIdx) {
             VaultItem memory lastItem = vault[lastIdx];
             vault[idx] = lastItem;
@@ -267,16 +328,18 @@ contract LiquidMeowToken is
         }
         delete indexOf[key];
         vault.pop();
-        IERC721(nft).safeTransferFrom(address(this), msg.sender, tokenId);
+
+        IERC721(KATIES).safeTransferFrom(address(this), msg.sender, tokenId);
         emit Withdrawn(msg.sender, tokenId);
     }
 
-    function withdrawSpecificBatch(address[] calldata nfts, uint256[] calldata tokenIds) external nonReentrant whenNotPaused {
-        require(nfts.length == tokenIds.length, "LM: lengths do not match");
-        require(nfts.length != 0, "LM: input cannot be empty");
-
-        uint256 count = nfts.length;
-
+    function withdrawSpecificBatch(uint256[] calldata tokenIds)
+        external
+        nonReentrant
+        whenNotPaused
+    {
+        uint256 count = tokenIds.length;
+        require(count != 0, "LM: input cannot be empty");
         require(count < MAX_BATCH + 1, "LM: batch too large");
 
         uint256 vaultLength = vault.length;
@@ -284,24 +347,28 @@ contract LiquidMeowToken is
 
         // Validate all requested items are present before making transfers or burns
         for (uint256 i = 0; i < count; ++i) {
-            bytes32 key = keccak256(abi.encode(nfts[i], tokenIds[i]));
+            bytes32 key = keccak256(abi.encode(KATIES, tokenIds[i]));
             require(indexOf[key] != 0, "LM: not in vault");
         }
 
         // Require caller has sufficient total LMT and fees for the whole batch
         uint256 totalFee = SPECIFIC_FEE * count;
         uint256 totalBurn = LMT_PER_NFT * count;
-        require(balanceOf(msg.sender) >= totalFee + totalBurn, "LM: insufficient LMT+fee");
+        require(
+            balanceOf(msg.sender) >= totalFee + totalBurn,
+            "LM: insufficient LMT+fee"
+        );
 
         // Charge fees & burn once validated
         _transfer(msg.sender, treasury, totalFee);
         _burn(msg.sender, totalBurn);
 
         for (uint256 i = 0; i < count; ++i) {
-            bytes32 key = keccak256(abi.encode(nfts[i], tokenIds[i]));
+            bytes32 key = keccak256(abi.encode(KATIES, tokenIds[i]));
             uint256 idxPlus1 = indexOf[key];
             uint256 idx = idxPlus1 - 1;
             uint256 lastIdx = vault.length - 1; // compute dynamically
+
             if (idx != lastIdx) {
                 VaultItem memory lastItem = vault[lastIdx];
                 vault[idx] = lastItem;
@@ -311,18 +378,39 @@ contract LiquidMeowToken is
             delete indexOf[key];
 
             vault.pop();
-            IERC721(nfts[i]).safeTransferFrom(address(this), msg.sender, tokenIds[i]);
+            IERC721(KATIES).safeTransferFrom(
+                address(this),
+                msg.sender,
+                tokenIds[i]
+            );
             emit Withdrawn(msg.sender, tokenIds[i]);
         }
     }
 
-    bytes4 private constant ERC721_RECEIVED = IERC721Receiver.onERC721Received.selector;
-    function onERC721Received(address, address from, uint256 tokenId, bytes calldata) external override nonReentrant returns (bytes4) {
+    // =========================
+    // ERC721 Receiver
+    // =========================
+
+    bytes4 private constant ERC721_RECEIVED =
+        IERC721Receiver.onERC721Received.selector;
+
+    function onERC721Received(
+        address,
+        address from,
+        uint256 tokenId,
+        bytes calldata
+    ) external override nonReentrant whenNotPaused returns (bytes4) {
+        // Only accept KATIES NFTs via safeTransferFrom
+        require(msg.sender == KATIES, "LM: invalid NFT");
         _depositFor(from, tokenId);
         return ERC721_RECEIVED;
     }
 
-    // Admins
+    // =========================
+    // Admins (treasury & rewards)
+    // =========================
+
+    /// @dev Simple treasury wallet update (no timelock).
     function updateTreasury(address _newTreasury) external onlyOwner {
         require(_newTreasury != address(0), "LM: treasury zero");
 
