@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.17;
+pragma solidity 0.8.30;
 
-import "@openzeppelin/contracts@4.9.6/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts@4.9.6/token/ERC20/extensions/ERC20Permit.sol";
-import "@openzeppelin/contracts@4.9.6/token/ERC721/IERC721.sol";
-import "@openzeppelin/contracts@4.9.6/token/ERC721/IERC721Receiver.sol";
-import "@openzeppelin/contracts@4.9.6/utils/math/Math.sol";
-import "@openzeppelin/contracts@4.9.6/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts@4.9.6/security/Pausable.sol";
-import "@openzeppelin/contracts@4.9.6/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
 interface ILiquidMeowRWD {
     function mint(address to, uint256 amount) external;
@@ -19,7 +19,7 @@ contract LiquidMeowToken is
     ERC20Permit,
     ReentrancyGuard,
     Pausable,
-    Ownable,
+    Ownable(0x25Ea0aEEfea7EAb97A163382c5B230e2E8dF5E1e),
     IERC721Receiver
 {
     uint256 private constant PRECISION = 1e18;
@@ -29,7 +29,7 @@ contract LiquidMeowToken is
     uint256 public rewardPerBlock = 45 * (10**17);
 
     ILiquidMeowRWD private constant rwdToken =
-        ILiquidMeowRWD(0x802a58368959C383B2d24C528723B39fc46778b5);
+        ILiquidMeowRWD(0xF8991d92c1e259867886CAF259Ce2016d1F05E05);
     address public constant KATIES =
         0x0a34eF3DAfD247eA4D66B8CC459CDcc8f5695234;
 
@@ -63,13 +63,8 @@ contract LiquidMeowToken is
     event RewardsClaimed(address indexed user, address indexed to, uint256 amount);
     event RewardPerTokenUpdated(uint256 indexed rewardPerTokenStored);
 
-    constructor(
-        address _treasury,
-        string memory _name,
-        string memory _symbol
-    ) payable ERC20(_name, _symbol) ERC20Permit(_name) {
-        require(_treasury != address(0), "LM: treasury zero");
-        treasury = _treasury;
+    constructor() payable ERC20("Liquid Katies Token", "LKT") ERC20Permit("Liquid Katies Token") {
+        treasury = 0x25Ea0aEEfea7EAb97A163382c5B230e2E8dF5E1e;
         lastUpdateBlock = block.number;
     }
 
@@ -78,13 +73,13 @@ contract LiquidMeowToken is
     }
 
     /// @dev Update rewards for `from` and `to` before token transfers (mint/burn/transfer).
-    function _beforeTokenTransfer(
+    function _update(
         address from,
         address to,
-        uint256 amount
+        uint256 value
     ) internal override(ERC20) {
-        if (amount == 0) {
-            super._beforeTokenTransfer(from, to, amount);
+        if (value == 0) {
+            super._update(from, to, value);
             return;
         }
 
@@ -103,7 +98,7 @@ contract LiquidMeowToken is
             userRewardPerTokenPaid[to] = cachedRewardPerTokenStored;
         }
 
-        super._beforeTokenTransfer(from, to, amount);
+        super._update(from, to, value);
     }
 
     /// @dev Canonical update: add accrued rewardPerToken based on blocks elapsed and supply.
