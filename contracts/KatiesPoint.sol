@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.17;
 
 // Import standard ERC20 and ownership management from OpenZeppelin
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract CustomMintERC20 is ERC20, Ownable {
+contract KatiesPoint is ERC20, Ownable {
     // Mapping to store addresses that are allowed to mint tokens
     mapping(address => bool) public minter;
 
@@ -17,10 +17,7 @@ contract CustomMintERC20 is ERC20, Ownable {
     uint256 public constant TOKENS_PER_BLOCK = 23 * 10**17;
 
     // Constructor sets token name, symbol and makes deployer the initial owner
-    constructor(
-        string memory _name,
-        string memory _symbol
-    ) ERC20(_name, _symbol) Ownable(msg.sender) {
+    constructor() ERC20("Katies Point", "KP") Ownable(msg.sender) {
         // Optionally set the contract deployer as a minter
         minter[msg.sender] = true;
 
