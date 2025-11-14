@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.30;
+pragma solidity 0.8.17;
 
 import "@openzeppelin/contracts@4.9.6/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts@4.9.6/token/ERC20/extensions/ERC20Permit.sol";
@@ -28,14 +28,15 @@ contract LiquidMeowToken is
     uint256 private constant MAX_BATCH = 20;
     uint256 public rewardPerBlock = 45 * (10**17);
 
-    ILiquidMeowRWD private constant rwdToken = ILiquidMeowRWD(0x2787CEd626674aBfC0FfB9bd1EEB7e1d5039A740);
+    ILiquidMeowRWD private constant rwdToken = ILiquidMeowRWD(0x802a58368959C383B2d24C528723B39fc46778b5);
+    address public constant KATIES = 0x0a34eF3DAfD247eA4D66B8CC459CDcc8f5695234;
+
     address public treasury;
     address public pendingTreasury;
     uint256 public pendingTreasuryTimestamp;
     uint48 private constant TREASURY_CHANGE_DELAY = 1 days;
 
     struct VaultItem {
-        address nft;
         address depositor;
         uint256 tokenId;
         uint256 depositedBlock;
@@ -50,16 +51,11 @@ contract LiquidMeowToken is
     mapping(address => uint256) public userRewardPerTokenPaid;
     mapping(address => uint256) public rewards;
 
-    event Deposited(address indexed depositor, address indexed nft, uint256 indexed tokenId, uint256 vaultIndex);
-    event WithdrawnLIFO(address indexed caller, address indexed nft, uint256 indexed tokenId);
-    event WithdrawnSpecific(address indexed caller, address indexed nft, uint256 indexed tokenId);
-    event BatchDeposited(address indexed depositor, uint256 count);
-    event BatchWithdrawnLIFO(address indexed caller, uint256 count);
-    event BatchWithdrawnSpecific(address indexed caller, uint256 count);
+    event Deposited(address indexed depositor, uint256 indexed tokenId, uint256 vaultIndex);
+    event Withdrawn(address indexed caller, uint256 indexed tokenId);
     event TreasuryChanged(address indexed oldTreasury, address indexed newTreasury);
     event RewardPerBlockChanged(uint256 oldVal, uint256 newVal);
     event RewardsClaimed(address indexed user, address indexed to, uint256 amount);
-    event TreasuryProposed(address indexed proposed);
     event RewardPerTokenUpdated(uint256 indexed rewardPerTokenStored);
 
     constructor(
@@ -185,27 +181,23 @@ contract LiquidMeowToken is
         emit RewardsClaimed(msg.sender, to, payment);
     }
 
-    function deposit(address nft, uint256 tokenId) external nonReentrant whenNotPaused {
-        _depositFor(msg.sender, nft, tokenId);
+    function deposit(uint256 tokenId) external nonReentrant whenNotPaused {
+        _depositFor(msg.sender, tokenId);
     }
 
-    function depositBatch(address[] calldata nfts, uint256[] calldata tokenIds) external nonReentrant whenNotPaused {
-        require(nfts.length == tokenIds.length, "LM: len mismatch");
-        uint256 len = nfts.length;
+    function depositBatch(uint256[] calldata tokenIds) external nonReentrant whenNotPaused {
+        uint256 len = tokenIds.length;
         require(len < MAX_BATCH + 1, "LM: batch too large");
         for (uint256 i = 0; i < len; ++i) {
-            _depositFor(msg.sender, nfts[i], tokenIds[i]);
+            _depositFor(msg.sender, tokenIds[i]);
         }
-        emit BatchDeposited(msg.sender, nfts.length);
     }
 
-    function _depositFor(address depositor, address nft, uint256 tokenId) internal {
-        require(nft != address(0), "LM: nft zero");
-        bytes32 key = keccak256(abi.encode(nft, tokenId));
+    function _depositFor(address depositor, uint256 tokenId) internal {
+        bytes32 key = keccak256(abi.encode(KATIES, tokenId));
         require(indexOf[key] == 0, "LM: already in vault");
-        require(IERC721(nft).ownerOf(tokenId) == address(this), "LM: not received");
+        require(IERC721(KATIES).ownerOf(tokenId) == address(this), "LM: not received");
         VaultItem memory item;
-        item.nft = nft;
         item.tokenId = tokenId;
         item.depositor = depositor;
         item.depositedBlock = block.number;
@@ -214,7 +206,7 @@ contract LiquidMeowToken is
         uint256 idx = vault.length - 1; // Cache vault.length in memory
         indexOf[key] = idx + 1;
         _mint(depositor, LMT_PER_NFT);
-        emit Deposited(depositor, nft, tokenId, idx);
+        emit Deposited(depositor, tokenId, idx);
     }
 
     function withdrawLIFO() external nonReentrant whenNotPaused {
@@ -222,11 +214,11 @@ contract LiquidMeowToken is
         require(vaultLength != 0, "LM: vault empty");
         _burn(msg.sender, LMT_PER_NFT);
         VaultItem storage item = vault[vaultLength - 1];
-        bytes32 key = keccak256(abi.encode(item.nft, item.tokenId));
+        bytes32 key = keccak256(abi.encode(KATIES, item.tokenId));
         delete indexOf[key];
         vault.pop();
-        IERC721(item.nft).safeTransferFrom(address(this), msg.sender, item.tokenId);
-        emit WithdrawnLIFO(msg.sender, item.nft, item.tokenId);
+        IERC721(KATIES).safeTransferFrom(address(this), msg.sender, item.tokenId);
+        emit Withdrawn(msg.sender, item.tokenId);
     }
 
     function withdrawLIFOBatch(uint256 count) external nonReentrant whenNotPaused {
@@ -240,16 +232,15 @@ contract LiquidMeowToken is
 
         for (uint256 i = 0; i < count; ++i) {
             VaultItem memory item = vault[vaultLength - 1];
-            bytes32 key = keccak256(abi.encode(item.nft, item.tokenId));
+            bytes32 key = keccak256(abi.encode(KATIES, item.tokenId));
             delete indexOf[key];
             vault.pop();
-            IERC721(item.nft).safeTransferFrom(address(this), msg.sender, item.tokenId);
-            emit WithdrawnLIFO(msg.sender, item.nft, item.tokenId);
+            IERC721(KATIES).safeTransferFrom(address(this), msg.sender, item.tokenId);
+            emit Withdrawn(msg.sender, item.tokenId);
             unchecked {
                 vaultLength--; // Decrement the cached length
             }
         }
-        emit BatchWithdrawnLIFO(msg.sender, count);
     }
 
     function withdrawSpecific(address nft, uint256 tokenId) external nonReentrant whenNotPaused {
@@ -271,13 +262,13 @@ contract LiquidMeowToken is
         if (idx != lastIdx) {
             VaultItem memory lastItem = vault[lastIdx];
             vault[idx] = lastItem;
-            bytes32 lastKey = keccak256(abi.encode(lastItem.nft, lastItem.tokenId));
+            bytes32 lastKey = keccak256(abi.encode(KATIES, lastItem.tokenId));
             indexOf[lastKey] = idx + 1;
         }
         delete indexOf[key];
         vault.pop();
         IERC721(nft).safeTransferFrom(address(this), msg.sender, tokenId);
-        emit WithdrawnSpecific(msg.sender, nft, tokenId);
+        emit Withdrawn(msg.sender, tokenId);
     }
 
     function withdrawSpecificBatch(address[] calldata nfts, uint256[] calldata tokenIds) external nonReentrant whenNotPaused {
@@ -314,21 +305,20 @@ contract LiquidMeowToken is
             if (idx != lastIdx) {
                 VaultItem memory lastItem = vault[lastIdx];
                 vault[idx] = lastItem;
-                bytes32 lastKey = keccak256(abi.encode(lastItem.nft, lastItem.tokenId));
+                bytes32 lastKey = keccak256(abi.encode(KATIES, lastItem.tokenId));
                 indexOf[lastKey] = idx + 1;
             }
             delete indexOf[key];
 
             vault.pop();
             IERC721(nfts[i]).safeTransferFrom(address(this), msg.sender, tokenIds[i]);
-            emit WithdrawnSpecific(msg.sender, nfts[i], tokenIds[i]);
+            emit Withdrawn(msg.sender, tokenIds[i]);
         }
-        emit BatchWithdrawnSpecific(msg.sender, count);
     }
 
     bytes4 private constant ERC721_RECEIVED = IERC721Receiver.onERC721Received.selector;
     function onERC721Received(address, address from, uint256 tokenId, bytes calldata) external override nonReentrant returns (bytes4) {
-        _depositFor(from, msg.sender, tokenId);
+        _depositFor(from, tokenId);
         return ERC721_RECEIVED;
     }
 
@@ -337,21 +327,8 @@ contract LiquidMeowToken is
         require(_newTreasury != address(0), "LM: treasury zero");
 
         if (_newTreasury != treasury) {
-            // If the new address is different from the current treasury, treat as a proposal
-            if (pendingTreasury != _newTreasury) {
-                pendingTreasury = _newTreasury;
-                pendingTreasuryTimestamp = block.timestamp + TREASURY_CHANGE_DELAY;
-                emit TreasuryProposed(_newTreasury);
-                return;
-            }
-
-            // If the same as pending, check if timelock elapsed
-            require(block.timestamp > pendingTreasuryTimestamp, "LM: too early to accept");
-
             address old = treasury;
-            treasury = pendingTreasury;
-            pendingTreasury = address(0);
-            delete pendingTreasuryTimestamp;
+            treasury = _newTreasury;
             emit TreasuryChanged(old, treasury);
         }
     }
