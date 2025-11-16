@@ -56,11 +56,11 @@ contract LiquidMeowTokenV2 is
 
     /// @notice KATIES NFT collection
     address public constant KATIES =
-        0x0a34eF3DAfD247eA4D66B8CC459CDcc8f5695234;
+        0xaE6ebe1D5Ee04B84DE04E6f31DDe0Aa5421c473A;
 
     /// @notice RWD token minter interface
     ILiquidMeowRWD private constant rwdToken =
-        ILiquidMeowRWD(0xF8991d92c1e259867886CAF259Ce2016d1F05E05);
+        ILiquidMeowRWD(0x22E4CA8B67B271AdaC5A5A3Bd81DEfe9dF38195F);
 
     // -------------------------------------------------------------------------
     // Reward configuration
@@ -645,4 +645,3 @@ contract LiquidMeowTokenV2 is
         emit UntrackedKatiesRescued(tokenId, to);
     }
 }
-
