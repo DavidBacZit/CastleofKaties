@@ -438,15 +438,14 @@ contract LiquidMeowTokenV2 is
     function withdrawLIFO() external nonReentrant whenNotPaused {
         uint256 vaultLength = vault.length;
         require(vaultLength != 0, "LM: vault empty");
-
-        // Burn LKT corresponding to 1 NFT
+    
         _burn(msg.sender, LMT_PER_NFT);
-
-        VaultItem storage item = vault[vaultLength - 1];
+    
+        VaultItem memory item = vault[vaultLength - 1];
         bytes32 key = keccak256(abi.encode(KATIES, item.tokenId));
         delete indexOf[key];
         vault.pop();
-
+    
         IERC721(KATIES).safeTransferFrom(
             address(this),
             msg.sender,
@@ -646,3 +645,4 @@ contract LiquidMeowTokenV2 is
         emit UntrackedKatiesRescued(tokenId, to);
     }
 }
+
