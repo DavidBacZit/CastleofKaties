@@ -51,6 +51,9 @@ contract LiquidMeowTokenV2 is
     uint256 private constant SPECIFIC_FEE = 200 * PRECISION;
     uint256 private constant MAX_BATCH = 20;
 
+    // upper bound to avoid overflow in reward calculations (M2)
+    uint256 public constant MAX_REWARD_PER_BLOCK_PER_NFT = 1e36;
+
     /// @notice KATIES NFT collection
     address public constant KATIES =
         0x0a34eF3DAfD247eA4D66B8CC459CDcc8f5695234;
@@ -101,10 +104,9 @@ contract LiquidMeowTokenV2 is
     /// @notice Treasury wallet receiving specific withdrawal fees
     address public treasury;
 
+    // (L2) Simplified: remove unused depositor and depositedBlock
     struct VaultItem {
-        address depositor;
         uint256 tokenId;
-        uint256 depositedBlock;
     }
 
     VaultItem[] public vault;
@@ -129,6 +131,9 @@ contract LiquidMeowTokenV2 is
 
     event RewardsClaimed(address indexed user, address indexed to, uint256 amount);
     event RewardPerTokenUpdated(uint256 indexed rewardPerTokenStored);
+
+    // (L3) Event for rescue of untracked NFTs
+    event UntrackedKatiesRescued(uint256 indexed tokenId, address indexed to);
 
     // -------------------------------------------------------------------------
     // Constructor
@@ -230,8 +235,9 @@ contract LiquidMeowTokenV2 is
         uint256 _rewardPerBlockPerNFT = rewardPerBlockPerNFT;
 
         if (supply != 0 && _rewardPerBlockPerNFT != 0) {
+            // (L4) Remove redundant mulDiv(..., 1); use direct multiplication.
             // accrued = blocksElapsed * rewardPerBlockPerNFT * PRECISION / LMT_PER_NFT
-            uint256 a = Math.mulDiv(blocksElapsed, _rewardPerBlockPerNFT, 1);
+            uint256 a = blocksElapsed * _rewardPerBlockPerNFT;
             uint256 accrued = Math.mulDiv(a, PRECISION, LMT_PER_NFT);
             rewardPerTokenStoredCache += accrued;
 
@@ -275,7 +281,8 @@ contract LiquidMeowTokenV2 is
 
         if (blocksElapsed != 0 && _totalSupply != 0 && _rewardPerBlockPerNFT != 0) {
             // accrued = blocksElapsed * rewardPerBlockPerNFT * PRECISION / LMT_PER_NFT
-            uint256 a = Math.mulDiv(blocksElapsed, _rewardPerBlockPerNFT, 1);
+            // (L4) same simplification as in _updateRewardPerToken
+            uint256 a = blocksElapsed * _rewardPerBlockPerNFT;
             uint256 accrued = Math.mulDiv(a, _precision, LMT_PER_NFT);
             _rewardPerTokenStored += accrued;
         }
@@ -300,7 +307,7 @@ contract LiquidMeowTokenV2 is
     /**
      * @notice Claim caller's rewards to their own address.
      */
-    function claimRewards() external nonReentrant {
+    function claimRewards() external nonReentrant whenNotPaused {
         _claimFor(msg.sender);
     }
 
@@ -310,7 +317,7 @@ contract LiquidMeowTokenV2 is
      *  Access control: Any caller can trigger a claim on behalf of `to`.
      *  The rewards are always sent to `to` (not msg.sender).
      */
-    function claimRewardsFor(address to) external nonReentrant {
+    function claimRewardsFor(address to) external nonReentrant whenNotPaused {
         _claimFor(to);
     }
 
@@ -356,11 +363,16 @@ contract LiquidMeowTokenV2 is
      *  - Only owner can call.
      *  - Always settles global rewards at the old rate up to current block
      *    before switching to the new rate.
+     *  - Allows setting to zero to disable emissions (M3).
+     *  - Enforces an upper bound to avoid overflow (M2).
      *
-     * @param amount New rewardPerBlockPerNFT value (must be non-zero).
+     * @param amount New rewardPerBlockPerNFT value.
      */
     function setRewardPerBlockPerNFT(uint256 amount) external onlyOwner {
-        require(amount != 0, "LM: zero reward");
+        require(
+            amount <= MAX_REWARD_PER_BLOCK_PER_NFT,
+            "LM: reward too high"
+        );
 
         // 1) Settle all rewards at the old rate up to the current block
         _updateRewardPerToken();
@@ -372,17 +384,6 @@ contract LiquidMeowTokenV2 is
             emit RewardPerBlockPerNFTChanged(old, amount);
         }
     }
-
-    /**
-     * @notice (Deprecated) Old reward rate setter is removed to prevent misuse.
-     * @dev
-     *  If you need a function with the old signature preserved for ABI reasons,
-     *  you can uncomment this and keep the revert instead of fully removing it.
-     *
-     *  function setRewardPerBlock(uint256) external pure {
-     *      revert("LM: deprecated");
-     *  }
-     */
 
     // -------------------------------------------------------------------------
     // NFT deposit (using transferFrom)
@@ -418,9 +419,7 @@ contract LiquidMeowTokenV2 is
         );
 
         VaultItem memory item;
-        item.tokenId = tokenId;
-        item.depositor = depositor;
-        item.depositedBlock = block.number;
+        item.tokenId = tokenId; // (L2) only tokendId is stored
 
         vault.push(item);
         uint256 idx = vault.length - 1;
@@ -439,14 +438,15 @@ contract LiquidMeowTokenV2 is
     function withdrawLIFO() external nonReentrant whenNotPaused {
         uint256 vaultLength = vault.length;
         require(vaultLength != 0, "LM: vault empty");
-    
+
+        // Burn LKT corresponding to 1 NFT
         _burn(msg.sender, LMT_PER_NFT);
-    
-        VaultItem memory item = vault[vaultLength - 1];
+
+        VaultItem storage item = vault[vaultLength - 1];
         bytes32 key = keccak256(abi.encode(KATIES, item.tokenId));
         delete indexOf[key];
         vault.pop();
-    
+
         IERC721(KATIES).safeTransferFrom(
             address(this),
             msg.sender,
@@ -643,6 +643,6 @@ contract LiquidMeowTokenV2 is
         require(IERC721(KATIES).ownerOf(tokenId) == address(this), "LM: not owned");
 
         IERC721(KATIES).safeTransferFrom(address(this), to, tokenId);
+        emit UntrackedKatiesRescued(tokenId, to);
     }
 }
-
