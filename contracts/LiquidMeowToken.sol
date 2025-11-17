@@ -34,7 +34,7 @@ interface ILiquidMeowRWD {
  *  - All external calls (NFT transfers, RWD minting) are done after internal state updates
  *    (checks-effects-interactions).
  */
-contract LiquidMeowTokenV2 is
+contract LiquidMeowToken is
     ERC20,
     ERC20Permit,
     ReentrancyGuard,
@@ -56,7 +56,7 @@ contract LiquidMeowTokenV2 is
 
     /// @notice KATIES NFT collection
     address public constant KATIES =
-        0xaE6ebe1D5Ee04B84DE04E6f31DDe0Aa5421c473A;
+        0x0a34eF3DAfD247eA4D66B8CC459CDcc8f5695234;
 
     /// @notice RWD token minter interface
     ILiquidMeowRWD private constant rwdToken =
@@ -141,8 +141,8 @@ contract LiquidMeowTokenV2 is
 
     constructor()
         payable
-        ERC20("Liquid Katies Token", "LKT")
-        ERC20Permit("Liquid Katies Token")
+        ERC20("Liquid Meow Token", "LMT")
+        ERC20Permit("Liquid Meow Token")
     {
         treasury = 0x25Ea0aEEfea7EAb97A163382c5B230e2E8dF5E1e;
         lastUpdateBlock = block.number;
