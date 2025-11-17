@@ -48,7 +48,7 @@ contract LiquidMeowToken is
 
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LMT_PER_NFT = 10000 * PRECISION;
-    uint256 private constant SPECIFIC_FEE = 200 * PRECISION;
+    uint256 private constant SPECIFIC_FEE = 500 * PRECISION;
     uint256 private constant MAX_BATCH = 20;
 
     // upper bound to avoid overflow in reward calculations (M2)
